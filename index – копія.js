@@ -1,5 +1,5 @@
 /**
- * RSIBOT v3.2 AUTO/MANUAL — Node.js
+ * RSIBOT v3.0 AUTO/MANUAL — Node.js
  * Smart Money focused
  */
 
@@ -44,6 +44,7 @@ const TIMEFRAME = "5m"
 const RSI_PERIOD = 14
 const OVERBOUGHT = 80
 const OVERSOLD = 20
+
 const AUTO_INTERVAL = 600_000 // 10 хв
 const REQUEST_PAUSE = 400
 const AUTO_MIN_PROB = 70
@@ -83,17 +84,17 @@ async function fetchOHLC(pair, range = "7d") {
         low: q.low[i],
         close: q.close[i],
       }))
-      .filter(c => c.close !== null)
+      .filter(c => c.close)
   } catch {
     return null
   }
 }
 
 // ================= INDICATORS =================
-function computeIndicators(candles) {
-  const close = candles.map(x => x.close)
-  const high = candles.map(x => x.high)
-  const low = candles.map(x => x.low)
+function computeIndicators(c) {
+  const close = c.map(x => x.close)
+  const high = c.map(x => x.high)
+  const low = c.map(x => x.low)
 
   return {
     rsi: RSI.calculate({ values: close, period: RSI_PERIOD }).at(-1),
@@ -104,15 +105,15 @@ function computeIndicators(candles) {
 }
 
 // ================= SMART MONEY =================
-function smartMoneyScore(candles) {
+function smartMoneyScore(c) {
   let score = 0
-  if (candles.length < 20) return 50
+  if (c.length < 20) return 50
 
-  if (candles.at(-1).high > candles.at(-5).high) score += 15
-  if (candles.at(-1).low < candles.at(-5).low) score += 15
+  if (c.at(-1).high > c.at(-5).high) score += 15
+  if (c.at(-1).low < c.at(-5).low) score += 15
 
-  const body = Math.abs(candles.at(-2).close - candles.at(-2).open)
-  const wick = candles.at(-2).high - candles.at(-2).low
+  const body = Math.abs(c.at(-2).close - c.at(-2).open)
+  const wick = c.at(-2).high - c.at(-2).low
   if (wick > body * 2) score += 20
 
   return Math.min(score, 100)
@@ -130,6 +131,7 @@ async function analyzePair(pair) {
   let probability = 20 + sm * 0.6
   const trend =
     ind.ma50 && ind.ma200 ? (ind.ma50 > ind.ma200 ? "up" : "down") : null
+
   if (trend) probability += 8
 
   let direction = "NEUTRAL"
@@ -145,30 +147,35 @@ async function analyzePair(pair) {
   }
 }
 
-// ================= FIND TOP N =================
-async function findTopPairs(n = 3) {
-  const results = []
+// ================= CORE SEARCH =================
+async function findBestPair() {
+  let best = null
+  let bestScore = -1
+
   for (const p of PAIRS) {
     const r = await analyzePair(p)
-    if (r) results.push(r)
+    if (!r) continue
+    if (r.probability > bestScore) {
+      bestScore = r.probability
+      best = r
+    }
     await sleep(REQUEST_PAUSE)
   }
-  results.sort((a, b) => b.probability - a.probability)
-  return results.slice(0, n)
+  return best
 }
 
 // ================= MANUAL =================
 async function bestPairManual(chatId) {
-  log("👤 РУЧНИЙ запуск: ТОП-3 пар")
-  const topPairs = await findTopPairs(3)
-  if (!topPairs.length) return
+  log("👤 РУЧНИЙ запуск: Найкраща пара")
+  const best = await findBestPair()
+  if (!best) return
 
-  let msg = "🏆 *ТОП-3 пари (ручний запит)*\n"
-  topPairs.forEach((r, i) => {
-    msg += `${i + 1}. 💱 ${r.pair} | 📈 ${r.direction} | RSI: ${
-      r.rsi
-    } | Ймовірність: ${r.probability}%\n`
-  })
+  const msg =
+    `🏆 *Найкраща пара (ручний запит)*\n` +
+    `💱 ${best.pair}\n` +
+    `📈 ${best.direction}\n` +
+    `RSI: ${best.rsi}\n` +
+    `Ймовірність: ${best.probability}%`
 
   bot.sendMessage(chatId, msg, { parse_mode: "Markdown" })
 }
@@ -176,19 +183,19 @@ async function bestPairManual(chatId) {
 // ================= AUTO =================
 async function bestPairAuto() {
   if (!isForexOpen()) return
-  log("🔁 АВТОЗАПУСК: пошук ТОП-1 пари")
+  log("🔁 АВТОЗАПУСК: пошук найкращої пари")
 
-  const topPairs = await findTopPairs(1)
-  if (!topPairs.length) return
-  const best = topPairs[0]
+  const best = await findBestPair()
+  if (!best) return
 
   if (best.probability >= AUTO_MIN_PROB) {
     const msg =
-      `🤖 *AUTO ТОП-1 пара*\n` +
+      `🤖 *AUTO Найкраща пара*\n` +
       `💱 ${best.pair}\n` +
       `📈 ${best.direction}\n` +
       `RSI: ${best.rsi}\n` +
       `Ймовірність: *${best.probability}%*`
+
     bot.sendMessage(USER_ID, msg, { parse_mode: "Markdown" })
     log(`📩 AUTO сигнал відправлено (${best.probability}%)`)
   } else {
